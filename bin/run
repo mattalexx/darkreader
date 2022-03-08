@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+here=$(readlink -e "$(dirname -- "${BASH_SOURCE[0]}")")
+root=$(dirname -- "$here")
+
+# shellcheck source=./logging.bash
+source "$here"/logging.bash
+# shellcheck source=./run.lib.bash
+source "$here"/run.lib.bash
+
+LOG_LEVEL=$LEVEL_DEBUG
+
+# Runner
+RUN_WORKFLOW='test-browser.yml'
+
+# conclusion createdAt databaseId event headBranch headSha name status updatedAt url workflowDatabaseId
+#RUN_FIELDS='databaseId,headSha,name,status,url,conclusion'
+RUN_FIELDS='conclusion,createdAt,databaseId,event,headBranch,headSha,name,status,updatedAt,url,workflowDatabaseId'
+
+RUN_BRANCH=$(git rev-parse --abbrev-ref --symbolic-full-name HEAD)
+RUN_REMOTE=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' | cut -d/ -f1)
+RUN_REMOTE_BRANCH=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' | cut -d/ -f2)
+
+GITHUB_USER=${GITHUB_USER:-$(yq '.[].user' ~/.config/gh/hosts.yml || true)}
+
+workflow() {
+    local run run_id
+
+    run_action ammend "$RUN_REMOTE" "$RUN_REMOTE_BRANCH"
+    run_action gh:workflow_run
+
+    while [[ -z ${run:-} ]]; do
+        run=$(run_action gh:get_run_by_head_sha)
+        sleep 1
+    done
+    run_id=$(jq '.databaseId' <<<"$run")
+
+    set -x
+    gh run watch "$run_id" --exit-status
+    if (($? > 0)); then
+        gh run view "$run_id" --log-failed
+    fi
+}
+
+gh:get_run_by_head_sha() {
+    local jq_query
+    printf -v jq_query '.[] | select(.headSha == "%s")' "$(git rev-parse HEAD)"
+
+    run_action gh:get_runs --limit 1 --jq "$jq_query"
+}
+
+gh:view_run_by_head_sha() {
+    local run_id
+    run_id=$(run_action gh:get_run_by_head_sha | jq '.databaseId')
+
+    gh run view "$run_id"
+}
+
+gh:get_run_by_id() {
+    local jq_query
+    printf -v jq_query '.[] | select(.databaseId == "%s")' "$1"
+
+    run_action gh:get_runs --limit 1 --jq "$jq_query"
+}
+
+gh:get_runs() {
+    cmd=(
+        gh run list
+        --branch "$RUN_REMOTE_BRANCH"
+        --workflow "$RUN_WORKFLOW"
+        --user "$GITHUB_USER"
+        --json "$RUN_FIELDS"
+        "$@"
+    )
+    execute cmd
+}
+
+gh:workflow_run() {
+    cmd=(
+        gh workflow run "$RUN_WORKFLOW"
+        --ref "$RUN_BRANCH"
+    )
+    execute cmd
+}
+
+run-builds() {
+    cd "$root"
+    rm -rf ./build ./darkreader.js
+
+    node ./tasks/build.js --release &
+    node ./tasks/build.js --debug &
+    node ./tasks/build.js --api &
+    wait
+
+    cp darkreader.js build
+    mv build ../.local/build-"$(date +%s)"
+}
+
+clean() {
+    cd "$root"
+
+    rm -rf ./darkreader.js build src/out tests/**/coverage
+    rm -rf ../_tmp
+    mkdir ../_tmp
+}
+
+run_action() {
+    "$@"
+}
+
+run_action "$@"
