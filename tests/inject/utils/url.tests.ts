@@ -7,7 +7,7 @@ it('URL is enabled', () => {
         'https://mail.google.com/mail/u/0/',
         {siteList: ['google.com'], siteListEnabled: [], applyToListedOnly: false} as UserSettings,
         {isProtected: false, isInDarkList: false},
-    )).toBe(false);
+    )).toBe(true);
     expect(isURLEnabled(
         'https://mail.google.com/mail/u/0/',
         {siteList: ['mail.google.com'], siteListEnabled: [], applyToListedOnly: false} as UserSettings,
